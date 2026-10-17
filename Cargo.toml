@@ -1,0 +1,21 @@
+[package]
+name = "peel"
+version = "0.1.0"
+edition = "2021"
+description = "Minimal right-click unzip/un7z tool. No ads, no updater, no nonsense."
+license = "MIT"
+
+[[bin]]
+name = "peel"
+path = "src/main.rs"
+
+[dependencies]
+zip = { version = "2", default-features = false, features = ["deflate", "deflate64", "bzip2", "time", "aes-crypto"] }
+sevenz-rust = { version = "0.6", features = ["aes256"] }
+rpassword = "7"
+
+[profile.release]
+opt-level = "z"
+lto = true
+strip = true
+panic = "abort"
