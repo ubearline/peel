@@ -3,6 +3,7 @@ use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 
 use encoding_rs::GBK;
+use indicatif::{ProgressBar, ProgressStyle};
 
 /// Destination dir: same folder as the archive, named after the archive stem.
 pub fn dest_dir(archive: &Path) -> PathBuf {
@@ -66,20 +67,47 @@ fn safe_rel_path(name: &str) -> Option<PathBuf> {
     }
 }
 
+fn new_bar(total: u64) -> ProgressBar {
+    let bar = ProgressBar::new(total);
+    bar.set_style(
+        ProgressStyle::with_template(
+            "[{elapsed_precise}] {bar:40.cyan/blue} {bytes}/{total_bytes} ({eta}) {msg}",
+        )
+        .unwrap()
+        .progress_chars("█▓░"),
+    );
+    bar
+}
+
 fn extract_zip(path: &Path, dest: &Path) -> Result<(), String> {
     let file = File::open(path).map_err(|e| e.to_string())?;
     let mut zip = zip::ZipArchive::new(file).map_err(|e| e.to_string())?;
     // Peek each entry; encrypted entries error on plain by_index, which is our cue to ask.
     let mut needs_password = false;
+    let mut total = 0u64;
     for i in 0..zip.len() {
-        if let Err(zip::result::ZipError::UnsupportedArchive(m)) = zip.by_index(i) {
-            if m.contains("Password") {
-                needs_password = true;
-                break;
+        match zip.by_index(i) {
+            Ok(e) => total += e.size(),
+            Err(zip::result::ZipError::UnsupportedArchive(m)) => {
+                if m.contains("Password") {
+                    needs_password = true;
+                    break;
+                }
             }
+            Err(_) => {}
         }
     }
     let password = if needs_password { ask_password() } else { None };
+    if needs_password {
+        // sizes are readable after decrypt with the right password
+        total = 0;
+        for i in 0..zip.len() {
+            if let Ok(e) = zip.by_index_decrypt(i, password.as_ref().unwrap().as_bytes()) {
+                total += e.size();
+            }
+        }
+    }
+    let bar = new_bar(total);
     for i in 0..zip.len() {
         let mut entry = match &password {
             Some(p) => zip
@@ -91,6 +119,7 @@ fn extract_zip(path: &Path, dest: &Path) -> Result<(), String> {
         let Some(rel) = safe_rel_path(&decode_name(&raw)) else {
             return Err(format!("unsafe path in archive: {}", entry.name()));
         };
+        bar.set_message(rel.display().to_string());
         let out_path = dest.join(rel);
         if entry.is_dir() {
             std::fs::create_dir_all(&out_path).map_err(|e| e.to_string())?;
@@ -99,27 +128,57 @@ fn extract_zip(path: &Path, dest: &Path) -> Result<(), String> {
                 std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
             }
             let mut out = File::create(&out_path).map_err(|e| e.to_string())?;
-            io::copy(&mut entry, &mut out).map_err(|e| e.to_string())?;
+            let n = io::copy(&mut entry, &mut out).map_err(|e| e.to_string())?;
+            bar.inc(n);
         }
     }
+    bar.finish_with_message("完成");
     Ok(())
 }
 
 fn extract_7z(path: &Path, dest: &Path) -> Result<(), String> {
-    let try_extract = |pw: Option<&str>| -> Result<(), sevenz_rust::Error> {
-        use sevenz_rust::Password;
-        sevenz_rust::decompress_file_with_password(path, dest, Password::from(pw.unwrap_or("")))
+    use sevenz_rust::{Password, SevenZReader};
+    let try_extract = |pw: Option<&str>| -> Result<(), String> {
+        let mut reader = SevenZReader::open(path, Password::from(pw.unwrap_or("")))
+            .map_err(|e| e.to_string())?;
+        let total: u64 = reader.archive().files.iter().map(|e| e.size()).sum();
+        let bar = new_bar(total);
+        reader
+            .for_each_entries(|entry, reader| {
+                let out_path = dest.join(entry.name());
+                if entry.is_directory() {
+                    std::fs::create_dir_all(&out_path)
+                        .map_err(|e| sevenz_rust::Error::other(format!("mkdir failed: {e}")))?;
+                } else {
+                    if let Some(parent) = out_path.parent() {
+                        std::fs::create_dir_all(parent)
+                            .map_err(|e| sevenz_rust::Error::other(format!("mkdir failed: {e}")))?;
+                    }
+                    bar.set_message(entry.name().to_string());
+                    let mut out = File::create(&out_path)
+                        .map_err(|e| sevenz_rust::Error::other(format!("create failed: {e}")))?;
+                    let n = io::copy(reader, &mut out)
+                        .map_err(|e| sevenz_rust::Error::other(format!("write failed: {e}")))?;
+                    bar.inc(n);
+                }
+                Ok(true)
+            })
+            .map_err(|e| {
+                bar.finish_and_clear();
+                e.to_string()
+            })?;
+        bar.finish_with_message("完成");
+        Ok(())
     };
-    try_extract(None)
-        .or_else(|e1| {
-            let pw = ask_password();
-            match pw {
-                Some(p) => try_extract(Some(&p))
-                    .map_err(|e2| format!("wrong password or failed: {e1}; retry failed: {e2}")),
-                None => Err(format!("password required: {e1}")),
-            }
-        })
-        .map_err(|e| e.to_string())
+
+    try_extract(None).or_else(|e1| {
+        let pw = ask_password();
+        match pw {
+            Some(p) => try_extract(Some(&p))
+                .map_err(|e2| format!("wrong password or failed: {e1}; retry failed: {e2}")),
+            None => Err(format!("password required: {e1}")),
+        }
+    })
 }
 
 fn main() {

@@ -14,6 +14,7 @@ zip = { version = "2", default-features = false, features = ["deflate", "deflate
 sevenz-rust = { version = "0.6", features = ["aes256"] }
 encoding_rs = "0.8"
 rpassword = "7"
+indicatif = "0.17"
 
 [profile.release]
 opt-level = "z"
