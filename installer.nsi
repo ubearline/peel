@@ -1,18 +1,50 @@
-﻿; peel NSIS installer — install exe + register right-click shell command
+﻿; peel NSIS installer (MUI2) — modern wizard, drive-letter adaptive install dir
+Unicode true
 !define APPNAME "peel"
 !define COMPANY "peel"
 !define VERSION "0.1.0"
 !define UNINST_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\peel"
 
+!include "MUI2.nsh"
+!include "FileFunc.nsh"
+
 Name "${APPNAME} ${VERSION}"
 OutFile "peel-setup.exe"
-InstallDir "$PROGRAMFILES64\peel"
 RequestExecutionLevel admin
 SetCompressor lzma
 
-Page directory
-Page instfiles
-UninstPage instfiles
+; ---- adaptive default install dir: 2nd fixed drive -> X:\app\peel, else Program Files ----
+Var DriveCount
+Var SecondDrive
+
+Function .onInit
+  StrCpy $DriveCount 0
+  StrCpy $SecondDrive ""
+  ${GetDrives} "HDD" GetDrivesCallback
+  ${If} $SecondDrive != ""
+    StrCpy $INSTDIR "$SecondDrive\app\peel"
+  ${Else}
+    StrCpy $INSTDIR "$PROGRAMFILES64\peel"
+  ${EndIf}
+FunctionEnd
+
+; $9 = drive path (e.g. "D:\") for each fixed drive found
+Function GetDrivesCallback
+  IntOp $DriveCount $DriveCount + 1
+  ${If} $DriveCount = 2
+    StrCpy $SecondDrive $9
+    Push "StopGetDrives"
+  ${Else}
+    Push "KeepSearching"
+  ${EndIf}
+FunctionEnd
+
+!define MUI_ABORTWARNING
+!insertmacro MUI_PAGE_DIRECTORY
+!insertmacro MUI_PAGE_INSTFILES
+!insertmacro MUI_UNPAGE_CONFIRM
+!insertmacro MUI_UNPAGE_INSTFILES
+!insertmacro MUI_LANGUAGE "SimpChinese"
 
 ; Register right-click entries under HKCU\Software\Classes (merged into HKCR view).
 ; Macros so install and uninstall can never drift apart.
