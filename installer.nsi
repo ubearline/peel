@@ -22,7 +22,7 @@ Function .onInit
   StrCpy $SecondDrive ""
   ${GetDrives} "HDD" GetDrivesCallback
   ${If} $SecondDrive != ""
-    StrCpy $INSTDIR "$SecondDrive\app\peel"
+    StrCpy $INSTDIR "$SecondDriveapp\peel"
   ${Else}
     StrCpy $INSTDIR "$PROGRAMFILES64\peel"
   ${EndIf}
