@@ -12,6 +12,7 @@ path = "src/main.rs"
 [dependencies]
 zip = { version = "2", default-features = false, features = ["deflate", "deflate64", "bzip2", "time", "aes-crypto"] }
 sevenz-rust = { version = "0.6", features = ["aes256"] }
+encoding_rs = "0.8"
 rpassword = "7"
 
 [profile.release]

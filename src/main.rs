@@ -2,6 +2,8 @@ use std::fs::File;
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 
+use encoding_rs::GBK;
+
 /// Destination dir: same folder as the archive, named after the archive stem.
 pub fn dest_dir(archive: &Path) -> PathBuf {
     archive.with_extension("")
@@ -26,11 +28,41 @@ fn is_7z(path: &Path) -> bool {
 }
 
 fn ask_password() -> Option<String> {
-    eprint!("This archive is password protected. Enter password: ");
+    eprint!("该压缩包已加密，请输入密码: ");
     match rpassword::read_password() {
         Ok(p) if p.is_empty() => None,
         Ok(p) => Some(p),
         Err(_) => None,
+    }
+}
+
+/// Decode a raw entry-name byte string: UTF-8 first, GBK fallback.
+/// Legacy Chinese zip tools (WinRAR/好压/360zip) store names in GBK.
+fn decode_name(raw: &[u8]) -> String {
+    match std::str::from_utf8(raw) {
+        Ok(s) => s.to_string(),
+        Err(_) => GBK.decode(raw).0.into_owned(),
+    }
+}
+
+/// Safe relative path from decoded name; rejects absolute paths and `..` escapes.
+fn safe_rel_path(name: &str) -> Option<PathBuf> {
+    let p = Path::new(name);
+    if p.is_absolute() {
+        return None;
+    }
+    let mut out = PathBuf::new();
+    for comp in p.components() {
+        match comp {
+            std::path::Component::Normal(c) => out.push(c),
+            std::path::Component::CurDir => {}
+            _ => return None, // ParentDir / Prefix / RootDir -> unsafe
+        }
+    }
+    if out.as_os_str().is_empty() {
+        None
+    } else {
+        Some(out)
     }
 }
 
@@ -55,10 +87,11 @@ fn extract_zip(path: &Path, dest: &Path) -> Result<(), String> {
                 .map_err(|e| e.to_string())?,
             None => zip.by_index(i).map_err(|e| e.to_string())?,
         };
-        let Some(name) = entry.enclosed_name().map(|p| p.to_owned()) else {
+        let raw = entry.name_raw().to_vec();
+        let Some(rel) = safe_rel_path(&decode_name(&raw)) else {
             return Err(format!("unsafe path in archive: {}", entry.name()));
         };
-        let out_path = dest.join(name);
+        let out_path = dest.join(rel);
         if entry.is_dir() {
             std::fs::create_dir_all(&out_path).map_err(|e| e.to_string())?;
         } else {
@@ -92,12 +125,12 @@ fn extract_7z(path: &Path, dest: &Path) -> Result<(), String> {
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     let Some(arg) = args.get(1) else {
-        eprintln!("Usage: peel <archive.zip|archive.7z>");
+        eprintln!("用法: peel <archive.zip|archive.7z>");
         std::process::exit(2);
     };
     let archive = PathBuf::from(arg);
     if !archive.is_file() {
-        eprintln!("Not a file: {}", archive.display());
+        eprintln!("文件不存在: {}", archive.display());
         std::process::exit(1);
     }
     let dest = dest_dir(&archive);
@@ -110,11 +143,11 @@ fn main() {
     };
 
     match result {
-        Ok(()) => println!("Extracted to {}", dest.display()),
+        Ok(()) => println!("已解压到 {}", dest.display()),
         Err(e) => {
-            eprintln!("Failed: {e}");
+            eprintln!("解压失败: {e}");
             // Pause so a double-clicked console window doesn't vanish instantly.
-            eprintln!("Press Enter to exit...");
+            eprintln!("按回车键退出...");
             let _ = io::stdin().read_line(&mut String::new());
             std::process::exit(1);
         }

@@ -1,4 +1,4 @@
-; peel NSIS installer — install exe + register right-click shell command
+﻿; peel NSIS installer — install exe + register right-click shell command
 !define APPNAME "peel"
 !define COMPANY "peel"
 !define VERSION "0.1.0"
@@ -17,14 +17,14 @@ UninstPage instfiles
 ; Register right-click entries under HKCU\Software\Classes (merged into HKCR view).
 ; Macros so install and uninstall can never drift apart.
 !macro REG_PEEL
-  WriteRegStr HKCU "Software\Classes\*\shell\peel" "MUIVerb" "Extract with peel"
+  WriteRegStr HKCU "Software\Classes\*\shell\peel" "MUIVerb" "解压到此处"
   WriteRegStr HKCU "Software\Classes\*\shell\peel" "Icon" "$INSTDIR\peel.exe"
   WriteRegStr HKCU "Software\Classes\*\shell\peel\command" "" '"$INSTDIR\peel.exe" "%1"'
   ; Also on .zip and .7z ProgIDs so it shows even where * is shadowed
-  WriteRegStr HKCU "Software\Classes\SystemFileAssociations\.zip\shell\peel" "MUIVerb" "Extract with peel"
+  WriteRegStr HKCU "Software\Classes\SystemFileAssociations\.zip\shell\peel" "MUIVerb" "解压到此处"
   WriteRegStr HKCU "Software\Classes\SystemFileAssociations\.zip\shell\peel" "Icon" "$INSTDIR\peel.exe"
   WriteRegStr HKCU "Software\Classes\SystemFileAssociations\.zip\shell\peel\command" "" '"$INSTDIR\peel.exe" "%1"'
-  WriteRegStr HKCU "Software\Classes\SystemFileAssociations\.7z\shell\peel" "MUIVerb" "Extract with peel"
+  WriteRegStr HKCU "Software\Classes\SystemFileAssociations\.7z\shell\peel" "MUIVerb" "解压到此处"
   WriteRegStr HKCU "Software\Classes\SystemFileAssociations\.7z\shell\peel" "Icon" "$INSTDIR\peel.exe"
   WriteRegStr HKCU "Software\Classes\SystemFileAssociations\.7z\shell\peel\command" "" '"$INSTDIR\peel.exe" "%1"'
 !macroend
