@@ -37,8 +37,24 @@ fn ask_password() -> Option<String> {
 fn extract_zip(path: &Path, dest: &Path) -> Result<(), String> {
     let file = File::open(path).map_err(|e| e.to_string())?;
     let mut zip = zip::ZipArchive::new(file).map_err(|e| e.to_string())?;
+    // Peek each entry; encrypted entries error on plain by_index, which is our cue to ask.
+    let mut needs_password = false;
     for i in 0..zip.len() {
-        let mut entry = zip.by_index(i).map_err(|e| e.to_string())?;
+        if let Err(zip::result::ZipError::UnsupportedArchive(m)) = zip.by_index(i) {
+            if m.contains("Password") {
+                needs_password = true;
+                break;
+            }
+        }
+    }
+    let password = if needs_password { ask_password() } else { None };
+    for i in 0..zip.len() {
+        let mut entry = match &password {
+            Some(p) => zip
+                .by_index_decrypt(i, p.as_bytes())
+                .map_err(|e| e.to_string())?,
+            None => zip.by_index(i).map_err(|e| e.to_string())?,
+        };
         let Some(name) = entry.enclosed_name().map(|p| p.to_owned()) else {
             return Err(format!("unsafe path in archive: {}", entry.name()));
         };
@@ -58,7 +74,8 @@ fn extract_zip(path: &Path, dest: &Path) -> Result<(), String> {
 
 fn extract_7z(path: &Path, dest: &Path) -> Result<(), String> {
     let try_extract = |pw: Option<&str>| -> Result<(), sevenz_rust::Error> {
-        sevenz_rust::decompress_file_with_password(path, dest, pw.unwrap_or(""))
+        use sevenz_rust::Password;
+        sevenz_rust::decompress_file_with_password(path, dest, Password::from(pw.unwrap_or("")))
     };
     try_extract(None)
         .or_else(|e1| {
