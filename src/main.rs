@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 
 use encoding_rs::GBK;
 use indicatif::{ProgressBar, ProgressStyle};
+use zip::write::SimpleFileOptions;
 
 /// Destination dir: same folder as the archive, named after the archive stem.
 /// If it already exists, append a sequence number: movie.zip -> movie/, movie (2)/, ...
@@ -218,25 +219,119 @@ fn extract_7z(path: &Path, dest: &Path) -> Result<(), String> {
     }
 }
 
+/// Compress a folder recursively into <sibling>.zip.
+/// Entries are stored relative to the folder's PARENT (so the zip contains
+/// the folder itself as root, matching what "压缩到同名zip" users expect
+/// when they later extract it). Existing .zip files are excluded everywhere
+/// in the tree: the output must never fold itself (or sibling archives) in,
+/// which would also risk recursive self-inclusion on re-compress.
+/// If the target zip exists, a numbered name is used, never overwrite.
+fn compress_zip(folder: &Path) -> Result<PathBuf, String> {
+    let parent = folder
+        .parent()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| PathBuf::from("."));
+    let name = folder
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .ok_or_else(|| format!("无效目录: {}", folder.display()))?;
+
+    let mut target = parent.join(format!("{name}.zip"));
+    let mut n = 2;
+    while target.exists() {
+        target = parent.join(format!("{name} ({n}).zip"));
+        n += 1;
+    }
+
+    // Walk first so the progress bar reflects the real total up front.
+    let mut files: Vec<PathBuf> = Vec::new();
+    let mut stack = vec![folder.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        for entry in std::fs::read_dir(&dir).map_err(|e| e.to_string())? {
+            let entry = entry.map_err(|e| e.to_string())?.path();
+            let is_zip = entry
+                .extension()
+                .and_then(|e| e.to_str())
+                .map(|e| e.eq_ignore_ascii_case("zip"))
+                .unwrap_or(false);
+            if is_zip {
+                continue; // never include .zip files (incl. the output itself)
+            }
+            if entry.is_dir() {
+                stack.push(entry);
+            } else if entry.is_file() {
+                files.push(entry);
+            }
+        }
+    }
+
+    let total: u64 = files
+        .iter()
+        .filter_map(|p| std::fs::metadata(p).ok())
+        .map(|m| m.len())
+        .sum();
+    let bar = new_bar(total);
+    let file = File::create(&target).map_err(|e| e.to_string())?;
+    let mut zip = zip::ZipWriter::new(file);
+    let options = SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+    let mut added_dirs: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+    for path in &files {
+        let rel = path.strip_prefix(&parent).map_err(|e| e.to_string())?;
+        // Rebuild directory entries (deduped) so empty dirs survive the round trip.
+        for ancestor in rel.ancestors().skip(1) {
+            let dir_entry = ancestor.to_string_lossy().replace('\\', "/");
+            if added_dirs.insert(dir_entry.clone()) && !dir_entry.is_empty() {
+                zip.add_directory(dir_entry, options)
+                    .map_err(|e| e.to_string())?;
+            }
+        }
+        bar.set_message(rel.display().to_string());
+        zip.start_file(rel.to_string_lossy().replace('\\', "/"), options)
+            .map_err(|e| e.to_string())?;
+        let mut f = File::open(path).map_err(|e| e.to_string())?;
+        let n = io::copy(&mut f, &mut zip).map_err(|e| e.to_string())?;
+        bar.inc(n);
+    }
+    zip.finish().map_err(|e| e.to_string())?;
+    bar.finish_with_message("完成");
+    Ok(target)
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     let Some(arg) = args.get(1) else {
-        eprintln!("用法: peel <archive.zip|archive.7z>");
-        eprintln!("  解压到同名新目录（目录已存在则自动加编号，绝不覆盖）");
+        eprintln!("用法:");
+        eprintln!("  peel <archive.zip|archive.7z>   解压到同名新目录（已存在则编号，绝不覆盖）");
+        eprintln!("  peel <folder>                   递归压缩为同级 <folder>.zip（跳过所有 .zip 文件，不覆盖）");
         std::process::exit(2);
     };
-    let archive = PathBuf::from(arg);
-    if !archive.is_file() {
-        eprintln!("文件不存在: {}", archive.display());
+    let path = PathBuf::from(arg);
+    if !path.exists() {
+        eprintln!("文件不存在: {}", path.display());
         std::process::exit(1);
     }
-    let dest = dest_dir(&archive);
+
+    if path.is_dir() {
+        match compress_zip(&path) {
+            Ok(target) => println!("已压缩到 {}", target.display()),
+            Err(e) => {
+                eprintln!("压缩失败: {e}");
+                eprintln!("按回车键退出...");
+                let _ = io::stdin().read_line(&mut String::new());
+                std::process::exit(1);
+            }
+        }
+        return;
+    }
+
+    let dest = dest_dir(&path);
     std::fs::create_dir_all(&dest).expect("failed to create destination dir");
 
-    let result = if is_7z(&archive) {
-        extract_7z(&archive, &dest)
+    let result = if is_7z(&path) {
+        extract_7z(&path, &dest)
     } else {
-        extract_zip(&archive, &dest)
+        extract_zip(&path, &dest)
     };
 
     match result {
