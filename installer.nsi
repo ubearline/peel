@@ -49,13 +49,14 @@ FunctionEnd
 !insertmacro MUI_UNPAGE_INSTFILES
 !insertmacro MUI_LANGUAGE "SimpChinese"
 
-; Register right-click entries under HKCU\Software\Classes (merged into HKCR view).
+; Register right-click entry under HKCU\Software\Classes (merged into HKCR view).
 ; Only .zip / .7z — peel only supports those formats.
+; Single entry, always extracts into a NEW numbered folder; never touches existing files.
 !macro REG_PEEL
-  WriteRegStr HKCU "Software\Classes\SystemFileAssociations\.zip\shell\peel" "MUIVerb" "解压到此处"
+  WriteRegStr HKCU "Software\Classes\SystemFileAssociations\.zip\shell\peel" "MUIVerb" "解压到同名文件夹"
   WriteRegStr HKCU "Software\Classes\SystemFileAssociations\.zip\shell\peel" "Icon" "$INSTDIR\peel.exe"
   WriteRegStr HKCU "Software\Classes\SystemFileAssociations\.zip\shell\peel\command" "" '"$INSTDIR\peel.exe" "%1"'
-  WriteRegStr HKCU "Software\Classes\SystemFileAssociations\.7z\shell\peel" "MUIVerb" "解压到此处"
+  WriteRegStr HKCU "Software\Classes\SystemFileAssociations\.7z\shell\peel" "MUIVerb" "解压到同名文件夹"
   WriteRegStr HKCU "Software\Classes\SystemFileAssociations\.7z\shell\peel" "Icon" "$INSTDIR\peel.exe"
   WriteRegStr HKCU "Software\Classes\SystemFileAssociations\.7z\shell\peel\command" "" '"$INSTDIR\peel.exe" "%1"'
 !macroend

@@ -6,8 +6,23 @@ use encoding_rs::GBK;
 use indicatif::{ProgressBar, ProgressStyle};
 
 /// Destination dir: same folder as the archive, named after the archive stem.
+/// If it already exists, append a sequence number: movie.zip -> movie/, movie (2)/, ...
+/// Flat extraction into the archive's own folder is intentionally NOT offered:
+/// it risks clobbering existing files with one careless click.
 pub fn dest_dir(archive: &Path) -> PathBuf {
-    archive.with_extension("")
+    let base = archive.with_extension("");
+    let parent = base.parent().unwrap_or(Path::new("."));
+    let name = base
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "extract".into());
+    let mut candidate = parent.join(&name);
+    let mut n = 2;
+    while candidate.exists() {
+        candidate = parent.join(format!("{name} ({n})"));
+        n += 1;
+    }
+    candidate
 }
 
 fn is_7z(path: &Path) -> bool {
@@ -121,6 +136,9 @@ fn extract_zip(path: &Path, dest: &Path) -> Result<(), String> {
         };
         bar.set_message(rel.display().to_string());
         let out_path = dest.join(rel);
+        if !entry.is_dir() && out_path.exists() {
+            return Err(format!("目标已存在，跳过覆盖: {}", out_path.display()));
+        }
         if entry.is_dir() {
             std::fs::create_dir_all(&out_path).map_err(|e| e.to_string())?;
         } else {
@@ -137,15 +155,21 @@ fn extract_zip(path: &Path, dest: &Path) -> Result<(), String> {
 }
 
 fn extract_7z(path: &Path, dest: &Path) -> Result<(), String> {
-    use sevenz_rust::{Password, SevenZReader};
-    let try_extract = |pw: Option<&str>| -> Result<(), String> {
-        let mut reader = SevenZReader::open(path, Password::from(pw.unwrap_or("")))
-            .map_err(|e| e.to_string())?;
+    use sevenz_rust::{Error, Password, SevenZReader};
+    let try_extract = |pw: Option<&str>| -> Result<(), Error> {
+        let mut reader =
+            SevenZReader::open(path, Password::from(pw.unwrap_or(""))).map_err(Error::from)?;
         let total: u64 = reader.archive().files.iter().map(|e| e.size()).sum();
         let bar = new_bar(total);
         reader
             .for_each_entries(|entry, reader| {
                 let out_path = dest.join(entry.name());
+                if !entry.is_directory() && out_path.exists() {
+                    return Err(sevenz_rust::Error::other(format!(
+                        "目标已存在，跳过覆盖: {}",
+                        out_path.display()
+                    )));
+                }
                 if entry.is_directory() {
                     std::fs::create_dir_all(&out_path)
                         .map_err(|e| sevenz_rust::Error::other(format!("mkdir failed: {e}")))?;
@@ -165,26 +189,40 @@ fn extract_7z(path: &Path, dest: &Path) -> Result<(), String> {
             })
             .map_err(|e| {
                 bar.finish_and_clear();
-                e.to_string()
+                e
             })?;
         bar.finish_with_message("完成");
         Ok(())
     };
 
-    try_extract(None).or_else(|e1| {
-        let pw = ask_password();
-        match pw {
-            Some(p) => try_extract(Some(&p))
-                .map_err(|e2| format!("wrong password or failed: {e1}; retry failed: {e2}")),
-            None => Err(format!("password required: {e1}")),
+    // Only prompt for a password when the failure is actually password-related;
+    // other errors (e.g. existing files) must fail loudly instead of asking.
+    let is_password_err = |e: &Error| {
+        matches!(
+            e,
+            Error::PasswordRequired
+                | Error::MaybeBadPassword(_)
+                | Error::ChecksumVerificationFailed
+        )
+    };
+    match try_extract(None) {
+        Ok(()) => Ok(()),
+        Err(e) if is_password_err(&e) => {
+            let pw = ask_password();
+            match pw {
+                Some(p) => try_extract(Some(&p)).map_err(|e2| format!("密码错误或解压失败: {e2}")),
+                None => Err("password required".into()),
+            }
         }
-    })
+        Err(e) => Err(e.to_string()),
+    }
 }
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     let Some(arg) = args.get(1) else {
         eprintln!("用法: peel <archive.zip|archive.7z>");
+        eprintln!("  解压到同名新目录（目录已存在则自动加编号，绝不覆盖）");
         std::process::exit(2);
     };
     let archive = PathBuf::from(arg);
