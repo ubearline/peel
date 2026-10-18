@@ -50,25 +50,36 @@ FunctionEnd
 !insertmacro MUI_LANGUAGE "SimpChinese"
 
 ; Register right-click entries under HKCU\Software\Classes (merged into HKCR view).
-; Files: only .zip / .7z get "解压到同名文件夹".
-; Folders get "压缩到同名zip" (recursive, skips .zip files, never overwrites).
+; Files: .zip / .7z get "解压到同名文件夹" and "解压到此处".
+; Folders get "压缩到同名zip" (recursive, never overwrites).
 !macro REG_PEEL
-  WriteRegStr HKCU "Software\Classes\SystemFileAssociations\.zip\shell\peel" "MUIVerb" "解压到同名文件夹"
-  WriteRegStr HKCU "Software\Classes\SystemFileAssociations\.zip\shell\peel" "Icon" "$INSTDIR\peel.exe"
-  WriteRegStr HKCU "Software\Classes\SystemFileAssociations\.zip\shell\peel\command" "" '"$INSTDIR\peel.exe" "%1"'
-  WriteRegStr HKCU "Software\Classes\SystemFileAssociations\.7z\shell\peel" "MUIVerb" "解压到同名文件夹"
-  WriteRegStr HKCU "Software\Classes\SystemFileAssociations\.7z\shell\peel" "Icon" "$INSTDIR\peel.exe"
-  WriteRegStr HKCU "Software\Classes\SystemFileAssociations\.7z\shell\peel\command" "" '"$INSTDIR\peel.exe" "%1"'
-  WriteRegStr HKCU "Software\Classes\Directory\shell\peel" "MUIVerb" "压缩到同名zip"
-  WriteRegStr HKCU "Software\Classes\Directory\shell\peel" "Icon" "$INSTDIR\peel.exe"
-  WriteRegStr HKCU "Software\Classes\Directory\shell\peel\command" "" '"$INSTDIR\peel.exe" "%1"'
+  WriteRegStr HKCU "Software\Classes\SystemFileAssociations\.zip\shell\peel-extract" "MUIVerb" "解压到同名文件夹"
+  WriteRegStr HKCU "Software\Classes\SystemFileAssociations\.zip\shell\peel-extract" "Icon" "$INSTDIR\peel.exe"
+  WriteRegStr HKCU "Software\Classes\SystemFileAssociations\.zip\shell\peel-extract\command" "" '"$INSTDIR\peel.exe" x "%1"'
+  WriteRegStr HKCU "Software\Classes\SystemFileAssociations\.zip\shell\peel-here" "MUIVerb" "解压到此处"
+  WriteRegStr HKCU "Software\Classes\SystemFileAssociations\.zip\shell\peel-here" "Icon" "$INSTDIR\peel.exe"
+  WriteRegStr HKCU "Software\Classes\SystemFileAssociations\.zip\shell\peel-here\command" "" '"$INSTDIR\peel.exe" x "%1" --here'
+  WriteRegStr HKCU "Software\Classes\SystemFileAssociations\.7z\shell\peel-extract" "MUIVerb" "解压到同名文件夹"
+  WriteRegStr HKCU "Software\Classes\SystemFileAssociations\.7z\shell\peel-extract" "Icon" "$INSTDIR\peel.exe"
+  WriteRegStr HKCU "Software\Classes\SystemFileAssociations\.7z\shell\peel-extract\command" "" '"$INSTDIR\peel.exe" x "%1"'
+  WriteRegStr HKCU "Software\Classes\SystemFileAssociations\.7z\shell\peel-here" "MUIVerb" "解压到此处"
+  WriteRegStr HKCU "Software\Classes\SystemFileAssociations\.7z\shell\peel-here" "Icon" "$INSTDIR\peel.exe"
+  WriteRegStr HKCU "Software\Classes\SystemFileAssociations\.7z\shell\peel-here\command" "" '"$INSTDIR\peel.exe" x "%1" --here'
+  WriteRegStr HKCU "Software\Classes\Directory\shell\peel-zip" "MUIVerb" "压缩到同名zip"
+  WriteRegStr HKCU "Software\Classes\Directory\shell\peel-zip" "Icon" "$INSTDIR\peel.exe"
+  WriteRegStr HKCU "Software\Classes\Directory\shell\peel-zip\command" "" '"$INSTDIR\peel.exe" c "%1" -f zip'
 !macroend
 
 !macro UNREG_PEEL
+  DeleteRegKey HKCU "Software\Classes\SystemFileAssociations\.zip\shell\peel-extract"
+  DeleteRegKey HKCU "Software\Classes\SystemFileAssociations\.zip\shell\peel-here"
+  DeleteRegKey HKCU "Software\Classes\SystemFileAssociations\.7z\shell\peel-extract"
+  DeleteRegKey HKCU "Software\Classes\SystemFileAssociations\.7z\shell\peel-here"
+  DeleteRegKey HKCU "Software\Classes\Directory\shell\peel-zip"
+  ; cleanup from older versions
   DeleteRegKey HKCU "Software\Classes\SystemFileAssociations\.zip\shell\peel"
   DeleteRegKey HKCU "Software\Classes\SystemFileAssociations\.7z\shell\peel"
   DeleteRegKey HKCU "Software\Classes\Directory\shell\peel"
-  ; cleanup from older versions that registered the * wildcard
   DeleteRegKey HKCU "Software\Classes\*\shell\peel"
 !macroend
 

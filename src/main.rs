@@ -2,6 +2,7 @@ use std::fs::File;
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 
+use clap::{CommandFactory, Parser};
 use encoding_rs::GBK;
 use indicatif::{ProgressBar, ProgressStyle};
 use zip::write::SimpleFileOptions;
@@ -298,50 +299,130 @@ fn compress_zip(folder: &Path) -> Result<PathBuf, String> {
     Ok(target)
 }
 
-fn main() {
-    let args: Vec<String> = std::env::args().collect();
-    let Some(arg) = args.get(1) else {
-        eprintln!("用法:");
-        eprintln!("  peel <archive.zip|archive.7z>   解压到同名新目录（已存在则编号，绝不覆盖）");
-        eprintln!("  peel <folder>                   递归压缩为同级 <folder>.zip（跳过所有 .zip 文件，不覆盖）");
-        std::process::exit(2);
-    };
-    let path = PathBuf::from(arg);
-    if !path.exists() {
-        eprintln!("文件不存在: {}", path.display());
-        std::process::exit(1);
-    }
+fn fail(e: String) -> ! {
+    eprintln!("{e}");
+    // Pause so a double-clicked console window doesn't vanish instantly.
+    eprintln!("按回车键退出...");
+    let _ = io::stdin().read_line(&mut String::new());
+    std::process::exit(1);
+}
 
-    if path.is_dir() {
-        match compress_zip(&path) {
-            Ok(target) => println!("已压缩到 {}", target.display()),
-            Err(e) => {
-                eprintln!("压缩失败: {e}");
-                eprintln!("按回车键退出...");
-                let _ = io::stdin().read_line(&mut String::new());
-                std::process::exit(1);
+#[derive(clap::Parser)]
+#[command(
+    name = "peel",
+    version,
+    about = "极简压缩/解压工具",
+    after_help = "裸路径（无动词）保持智能默认：压缩包→解压到同名目录，目录→压缩成 zip。"
+)]
+struct Cli {
+    #[command(subcommand)]
+    cmd: Option<Cmd>,
+    /// 不带动词时的裸路径（智能默认）
+    path: Option<PathBuf>,
+}
+
+#[derive(clap::Subcommand)]
+enum Cmd {
+    /// 解压压缩包
+    X {
+        /// 压缩包路径（多选时逐个处理）
+        #[arg(required = true)]
+        archives: Vec<PathBuf>,
+        /// 解压到压缩包所在目录（不建同名文件夹，条目扁平展开）
+        #[arg(long)]
+        here: bool,
+    },
+    /// 压缩目录
+    C {
+        /// 目录路径（多选时逐个处理）
+        #[arg(required = true)]
+        folders: Vec<PathBuf>,
+        /// 目标格式（目前仅 zip）
+        #[arg(short, long, value_enum, default_value = "zip")]
+        format: Format,
+    },
+}
+
+#[derive(clap::ValueEnum, Clone, Copy)]
+enum Format {
+    Zip,
+}
+
+fn extract_one(path: &Path, here: bool) -> Result<(), String> {
+    if here {
+        let dest = path.parent().unwrap_or(Path::new(".")).to_path_buf();
+        let result = if is_7z(path) {
+            extract_7z(path, &dest)
+        } else {
+            extract_zip(path, &dest)
+        };
+        match result {
+            Ok(()) => println!("已解压到 {}", dest.display()),
+            Err(e) => return Err(format!("解压失败: {e}")),
+        }
+    } else {
+        let dest = dest_dir(path);
+        std::fs::create_dir_all(&dest).map_err(|e| format!("创建目录失败: {e}"))?;
+        let result = if is_7z(path) {
+            extract_7z(path, &dest)
+        } else {
+            extract_zip(path, &dest)
+        };
+        match result {
+            Ok(()) => println!("已解压到 {}", dest.display()),
+            Err(e) => return Err(format!("解压失败: {e}")),
+        }
+    }
+    Ok(())
+}
+
+fn main() {
+    let cli = Cli::parse();
+    match cli.cmd {
+        Some(Cmd::X { archives, here }) => {
+            for a in &archives {
+                if !a.exists() {
+                    fail(format!("文件不存在: {}", a.display()));
+                }
+                if let Err(e) = extract_one(a, here) {
+                    fail(e);
+                }
             }
         }
-        return;
-    }
-
-    let dest = dest_dir(&path);
-    std::fs::create_dir_all(&dest).expect("failed to create destination dir");
-
-    let result = if is_7z(&path) {
-        extract_7z(&path, &dest)
-    } else {
-        extract_zip(&path, &dest)
-    };
-
-    match result {
-        Ok(()) => println!("已解压到 {}", dest.display()),
-        Err(e) => {
-            eprintln!("解压失败: {e}");
-            // Pause so a double-clicked console window doesn't vanish instantly.
-            eprintln!("按回车键退出...");
-            let _ = io::stdin().read_line(&mut String::new());
-            std::process::exit(1);
+        Some(Cmd::C {
+            folders,
+            format: Format::Zip,
+        }) => {
+            for f in &folders {
+                if !f.is_dir() {
+                    fail(format!("不是目录: {}", f.display()));
+                }
+                match compress_zip(f) {
+                    Ok(target) => println!("已压缩到 {}", target.display()),
+                    Err(e) => fail(format!("压缩失败: {e}")),
+                }
+            }
+        }
+        None => {
+            let Some(arg) = cli.path else {
+                // Clap already printed usage via help; keep a friendly hint.
+                Cli::command().print_help().ok();
+                println!();
+                std::process::exit(2);
+            };
+            let path = PathBuf::from(&arg);
+            if !path.exists() {
+                eprintln!("文件不存在: {}", path.display());
+                std::process::exit(1);
+            }
+            if path.is_dir() {
+                match compress_zip(&path) {
+                    Ok(target) => println!("已压缩到 {}", target.display()),
+                    Err(e) => fail(format!("压缩失败: {e}")),
+                }
+            } else if let Err(e) = extract_one(&path, false) {
+                fail(e);
+            }
         }
     }
 }
