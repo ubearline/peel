@@ -1,0 +1,38 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-gnu
+
+      - name: Install NSIS
+        run: sudo apt-get update && sudo apt-get install -y nsis gcc-mingw-w64-x86-64
+
+      - name: Build peel.exe
+        run: cargo build --release --target x86_64-pc-windows-gnu
+
+      - name: Build installer
+        run: makensis installer.nsi
+
+      - name: Rename artifact with version
+        run: |
+          V="${GITHUB_REF_NAME#v}"
+          cp peel-setup.exe "peel-setup-${V}.exe"
+
+      - name: Upload to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: peel-setup-*.exe
