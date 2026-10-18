@@ -56,7 +56,8 @@ makensis installer.nsi   # 产出 peel-setup.exe
 ## 发布
 
 CI（GitHub Actions）由 tag 触发：`git tag v0.x.y && git push origin v0.x.y`，
-自动构建 Win64 安装包并挂到 Release。
+自动构建 Win64 安装包并挂到 Release。安装包版本由 tag 经 `-DVERSION` 注入 NSIS，
+Cargo.toml 的版本号仅是开发字段（`x.y.z-dev`），与 tag 无约束，发版无需 bump。
 
 ## 开发
 
