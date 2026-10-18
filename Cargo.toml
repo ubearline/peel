@@ -16,6 +16,9 @@ encoding_rs = "0.8"
 rpassword = "7"
 indicatif = "0.17"
 
+[target.'cfg(windows)'.build-dependencies]
+winres = "0.1"
+
 [profile.release]
 opt-level = "z"
 lto = true
