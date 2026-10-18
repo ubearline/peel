@@ -13,24 +13,34 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Extract version from tag
+        id: ver
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Verify Cargo.toml version matches tag
+        run: |
+          CARGO_V=$(grep -m1 '^version' Cargo.toml | sed 's/version *= *"\(.*\)"/\1/')
+          if [ "$CARGO_V" != "${{ steps.ver.outputs.version }}" ]; then
+            echo "::error::tag ${{ github.ref_name }} but Cargo.toml version is $CARGO_V — bump Cargo.toml"
+            exit 1
+          fi
+
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: x86_64-pc-windows-gnu
 
-      - name: Install NSIS
+      - name: Install NSIS + mingw
         run: sudo apt-get update && sudo apt-get install -y nsis gcc-mingw-w64-x86-64
 
       - name: Build peel.exe
         run: cargo build --release --target x86_64-pc-windows-gnu
 
       - name: Build installer
-        run: makensis installer.nsi
+        run: makensis -DVERSION=${{ steps.ver.outputs.version }} installer.nsi
 
       - name: Rename artifact with version
-        run: |
-          V="${GITHUB_REF_NAME#v}"
-          cp peel-setup.exe "peel-setup-${V}.exe"
+        run: cp peel-setup.exe "peel-setup-${{ steps.ver.outputs.version }}.exe"
 
       - name: Upload to release
         uses: softprops/action-gh-release@v2

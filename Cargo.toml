@@ -1,6 +1,6 @@
 [package]
 name = "peel"
-version = "0.1.0"
+version = "0.1.2"
 edition = "2021"
 description = "Minimal right-click unzip/un7z tool. No ads, no updater, no nonsense."
 license = "MIT"
@@ -16,8 +16,8 @@ encoding_rs = "0.8"
 rpassword = "7"
 indicatif = "0.17"
 
-[target.'cfg(windows)'.build-dependencies]
-winres = "0.1"
+[build-dependencies]
+winresource = "0.1"
 
 [profile.release]
 opt-level = "z"

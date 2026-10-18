@@ -2,7 +2,10 @@
 Unicode true
 !define APPNAME "peel"
 !define COMPANY "peel"
-!define VERSION "0.1.0"
+; VERSION is injected: makensis -DVERSION=x.y.z installer.nsi (CI passes the git tag)
+!ifndef VERSION
+  !define VERSION "0.0.0-dev"
+!endif
 !define UNINST_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\peel"
 
 !include "MUI2.nsh"
