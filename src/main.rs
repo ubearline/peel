@@ -323,14 +323,11 @@ struct Cli {
 
 #[derive(clap::Subcommand)]
 enum Cmd {
-    /// 解压压缩包
+    /// 解压压缩包（始终解压到同名新目录，绝不平铺到当前位置）
     X {
         /// 压缩包路径（多选时逐个处理）
         #[arg(required = true)]
         archives: Vec<PathBuf>,
-        /// 解压到压缩包所在目录（不建同名文件夹，条目扁平展开）
-        #[arg(long)]
-        here: bool,
     },
     /// 压缩目录
     C {
@@ -348,30 +345,17 @@ enum Format {
     Zip,
 }
 
-fn extract_one(path: &Path, here: bool) -> Result<(), String> {
-    if here {
-        let dest = path.parent().unwrap_or(Path::new(".")).to_path_buf();
-        let result = if is_7z(path) {
-            extract_7z(path, &dest)
-        } else {
-            extract_zip(path, &dest)
-        };
-        match result {
-            Ok(()) => println!("已解压到 {}", dest.display()),
-            Err(e) => return Err(format!("解压失败: {e}")),
-        }
+fn extract_one(path: &Path) -> Result<(), String> {
+    let dest = dest_dir(path);
+    std::fs::create_dir_all(&dest).map_err(|e| format!("创建目录失败: {e}"))?;
+    let result = if is_7z(path) {
+        extract_7z(path, &dest)
     } else {
-        let dest = dest_dir(path);
-        std::fs::create_dir_all(&dest).map_err(|e| format!("创建目录失败: {e}"))?;
-        let result = if is_7z(path) {
-            extract_7z(path, &dest)
-        } else {
-            extract_zip(path, &dest)
-        };
-        match result {
-            Ok(()) => println!("已解压到 {}", dest.display()),
-            Err(e) => return Err(format!("解压失败: {e}")),
-        }
+        extract_zip(path, &dest)
+    };
+    match result {
+        Ok(()) => println!("已解压到 {}", dest.display()),
+        Err(e) => return Err(format!("解压失败: {e}")),
     }
     Ok(())
 }
@@ -379,12 +363,12 @@ fn extract_one(path: &Path, here: bool) -> Result<(), String> {
 fn main() {
     let cli = Cli::parse();
     match cli.cmd {
-        Some(Cmd::X { archives, here }) => {
+        Some(Cmd::X { archives }) => {
             for a in &archives {
                 if !a.exists() {
                     fail(format!("文件不存在: {}", a.display()));
                 }
-                if let Err(e) = extract_one(a, here) {
+                if let Err(e) = extract_one(a) {
                     fail(e);
                 }
             }
@@ -420,7 +404,7 @@ fn main() {
                     Ok(target) => println!("已压缩到 {}", target.display()),
                     Err(e) => fail(format!("压缩失败: {e}")),
                 }
-            } else if let Err(e) = extract_one(&path, false) {
+            } else if let Err(e) = extract_one(&path) {
                 fail(e);
             }
         }
