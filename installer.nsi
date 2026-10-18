@@ -86,6 +86,9 @@ FunctionEnd
 Section "Install"
   SetOutPath $INSTDIR
   File "target\x86_64-pc-windows-gnu\release\peel.exe"
+  ; Idempotent install: wipe every key any historical version may have written,
+  ; then write the current set. Overwriting an old install can never leave ghosts.
+  !insertmacro UNREG_PEEL
   !insertmacro REG_PEEL
 
   ; Uninstaller
