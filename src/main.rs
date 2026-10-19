@@ -220,6 +220,18 @@ fn extract_7z(path: &Path, dest: &Path) -> Result<(), String> {
     }
 }
 
+/// Returns true if `folder` is a complete, standalone git working tree:
+/// a real `.git` *directory* (not a submodule pointer file) holding the
+/// minimal structure needed to later `git restore`/`checkout` the tree.
+fn is_complete_git_repo(folder: &Path) -> bool {
+    let git = folder.join(".git");
+    if !git.is_dir() {
+        return false; // absent, or a submodule (.git is a file) -> not standalone
+    }
+    let need = [git.join("HEAD"), git.join("objects"), git.join("refs")];
+    need.iter().all(|p| p.exists())
+}
+
 /// Compress a folder recursively into <sibling>.zip.
 /// Entries are stored relative to the folder's PARENT (so the zip contains
 /// the folder itself as root, matching what "压缩到同名zip" users expect
@@ -227,6 +239,10 @@ fn extract_7z(path: &Path, dest: &Path) -> Result<(), String> {
 /// in the tree: the output must never fold itself (or sibling archives) in,
 /// which would also risk recursive self-inclusion on re-compress.
 /// If the target zip exists, a numbered name is used, never overwrite.
+///
+/// Smart git: when `folder` is a complete git repo, its working tree is fully
+/// restorable from `.git`, so we pack *only* `.git` (tiny) and let extraction
+/// `git restore` the rest. The resulting archive's root is `.git/...`.
 fn compress_zip(folder: &Path) -> Result<PathBuf, String> {
     let parent = folder
         .parent()
@@ -244,9 +260,22 @@ fn compress_zip(folder: &Path) -> Result<PathBuf, String> {
         n += 1;
     }
 
+    // Smart git: a complete repo's working tree is fully restorable from .git,
+    // so pack only .git (tiny) and let extraction `git restore` the rest.
+    let git_dir = folder.join(".git");
+    let (pack_root, strip): (&Path, &Path) = if is_complete_git_repo(folder) {
+        println!(
+            "检测到完整 git 仓库 {}，仅压缩 .git（解压时自动 git restore）",
+            name
+        );
+        (git_dir.as_path(), folder)
+    } else {
+        (folder, parent.as_path())
+    };
+
     // Walk first so the progress bar reflects the real total up front.
     let mut files: Vec<PathBuf> = Vec::new();
-    let mut stack = vec![folder.to_path_buf()];
+    let mut stack = vec![pack_root.to_path_buf()];
     while let Some(dir) = stack.pop() {
         for entry in std::fs::read_dir(&dir).map_err(|e| e.to_string())? {
             let entry = entry.map_err(|e| e.to_string())?.path();
@@ -278,7 +307,7 @@ fn compress_zip(folder: &Path) -> Result<PathBuf, String> {
     let mut added_dirs: std::collections::HashSet<String> = std::collections::HashSet::new();
 
     for path in &files {
-        let rel = path.strip_prefix(&parent).map_err(|e| e.to_string())?;
+        let rel = path.strip_prefix(strip).map_err(|e| e.to_string())?;
         // Rebuild directory entries (deduped) so empty dirs survive the round trip.
         for ancestor in rel.ancestors().skip(1) {
             let dir_entry = ancestor.to_string_lossy().replace('\\', "/");
@@ -297,6 +326,93 @@ fn compress_zip(folder: &Path) -> Result<PathBuf, String> {
     zip.finish().map_err(|e| e.to_string())?;
     bar.finish_with_message("完成");
     Ok(target)
+}
+
+/// True when `dest` holds exactly one entry: a `.git` directory. This is the
+/// signature of an archive that contained only `.git` (what we emit for
+/// complete git repos), and is the cue to auto-restore the working tree.
+fn is_git_only_archive(dest: &Path) -> bool {
+    let mut iter = match std::fs::read_dir(dest) {
+        Ok(i) => i,
+        Err(_) => return false,
+    };
+    let mut count = 0;
+    let mut git_ok = false;
+    for entry in iter.by_ref() {
+        let entry = match entry {
+            Ok(e) => e,
+            Err(_) => return false,
+        };
+        count += 1;
+        if count > 1 {
+            return false; // more than one top-level entry -> not a bare .git
+        }
+        if entry.file_name().to_string_lossy() == ".git" && entry.path().is_dir() {
+            git_ok = true;
+        } else {
+            return false; // any non-.git entry -> not a bare .git
+        }
+    }
+    git_ok && count == 1
+}
+
+/// Decide whether `git --version` output indicates >= (major, minor).
+/// Tolerates vendor suffixes like "2.34.1.windows.1".
+fn git_version_at_least(ver: &str, major: u32, minor: u32) -> bool {
+    let nums: Vec<u32> = ver
+        .split_whitespace()
+        .last()
+        .unwrap_or("")
+        .split('.')
+        .filter_map(|s| s.trim().parse::<u32>().ok())
+        .collect();
+    let maj = nums.first().copied().unwrap_or(0);
+    let min = nums.get(1).copied().unwrap_or(0);
+    (maj, min) >= (major, minor)
+}
+
+/// Restore the working tree of a freshly-extracted `.git`-only archive.
+/// Uses `git restore .` (git >= 2.23) and falls back to `git checkout .`
+/// for older git. If `git` is not installed, this is a silent no-op
+/// ("有就处理，没有就不处理"): we don't ship a Rust git lib, we `try git`.
+fn git_restore(dest: &Path) -> Result<(), String> {
+    let ver = match std::process::Command::new("git").arg("--version").output() {
+        Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).into_owned(),
+        _ => return Ok(()), // git unavailable -> nothing to do
+    };
+    let subcmd = if git_version_at_least(&ver, 2, 23) {
+        "restore"
+    } else {
+        "checkout"
+    };
+    match std::process::Command::new("git")
+        .arg("-C")
+        .arg(dest)
+        .arg(subcmd)
+        .arg(".")
+        .status()
+    {
+        Ok(s) if s.success() => {
+            println!(
+                "已自动执行 git {subcmd} . 恢复工作区（{}）",
+                dest.display()
+            );
+            Ok(())
+        }
+        Ok(s) => Err(format!("git {subcmd} . 失败（退出码 {:?}）", s.code())),
+        Err(e) => Err(format!("无法运行 git: {e}")),
+    }
+}
+
+/// After extraction: if the result is a bare `.git` dir, try to restore.
+/// Restoration failures are warned but do not fail the (already successful)
+/// extraction.
+fn maybe_git_restore(dest: &Path) {
+    if is_git_only_archive(dest) {
+        if let Err(e) = git_restore(dest) {
+            eprintln!("⚠ {e}（解压本身已成功）");
+        }
+    }
 }
 
 fn fail(e: String) -> ! {
@@ -354,7 +470,10 @@ fn extract_one(path: &Path) -> Result<(), String> {
         extract_zip(path, &dest)
     };
     match result {
-        Ok(()) => println!("已解压到 {}", dest.display()),
+        Ok(()) => {
+            println!("已解压到 {}", dest.display());
+            maybe_git_restore(&dest);
+        }
         Err(e) => return Err(format!("解压失败: {e}")),
     }
     Ok(())
@@ -408,5 +527,58 @@ fn main() {
                 fail(e);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn git_version_threshold_chooses_restore() {
+        // git >= 2.23 -> restore; older (incl. vendor suffixes) -> checkout fallback.
+        assert!(git_version_at_least("git version 2.55.0.windows.3", 2, 23));
+        assert!(git_version_at_least("git version 2.23.0", 2, 23));
+        assert!(git_version_at_least("git version 3.0.0", 2, 23));
+        assert!(!git_version_at_least("git version 2.22.9", 2, 23));
+        assert!(!git_version_at_least("git version 2.20.1.windows.1", 2, 23));
+        assert!(!git_version_at_least("git version 1.9.5", 2, 23));
+        assert!(!git_version_at_least("git version garbage", 2, 23));
+    }
+
+    #[test]
+    fn git_only_requires_exactly_dotgit() {
+        let dir = std::env::temp_dir().join("peel_test_gitonly");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join(".git")).unwrap();
+        std::fs::write(dir.join(".git").join("HEAD"), b"ref: refs/heads/master").unwrap();
+        assert!(is_git_only_archive(&dir));
+        // a sibling working-tree file means the archive wasn't .git-only
+        std::fs::write(dir.join("readme.txt"), b"x").unwrap();
+        assert!(!is_git_only_archive(&dir));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn complete_repo_detection() {
+        let repo = std::env::temp_dir().join("peel_test_repo");
+        let _ = std::fs::remove_dir_all(&repo);
+        std::fs::create_dir_all(&repo).unwrap();
+        assert!(!is_complete_git_repo(&repo)); // no .git yet
+        let git = repo.join(".git");
+        std::fs::create_dir_all(git.join("objects")).unwrap();
+        std::fs::create_dir_all(git.join("refs")).unwrap();
+        std::fs::write(git.join("HEAD"), b"ref: refs/heads/master").unwrap();
+        assert!(is_complete_git_repo(&repo));
+
+        // .git as a *file* (submodule pointer) is not a standalone repo
+        let sub = std::env::temp_dir().join("peel_test_sub");
+        let _ = std::fs::remove_dir_all(&sub);
+        std::fs::create_dir_all(&sub).unwrap();
+        std::fs::write(sub.join(".git"), b"gitdir: ../elsewhere/.git").unwrap();
+        assert!(!is_complete_git_repo(&sub));
+
+        let _ = std::fs::remove_dir_all(&repo);
+        let _ = std::fs::remove_dir_all(&sub);
     }
 }

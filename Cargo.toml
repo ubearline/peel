@@ -1,6 +1,6 @@
 [package]
 name = "peel"
-version = "0.2.1-dev"
+version = "0.2.2-dev"
 edition = "2021"
 description = "Minimal right-click unzip/un7z tool. No ads, no updater, no nonsense."
 license = "MIT"
